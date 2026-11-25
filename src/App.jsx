@@ -458,8 +458,8 @@ export default function App() {
     let timer = null;
     let inFlight = false;
 
-    const POLL_OK_MS = 1000;    // healthy cadence — spectators get scores fast
-    const POLL_MAX_MS = 5000;   // ceiling while failing
+    const POLL_OK_MS = 12000;   // healthy cadence — Apps Script is not fast
+    const POLL_MAX_MS = 45000;  // ceiling while failing
 
     const schedule = (ms) => {
       if (stopped) return;
@@ -483,7 +483,7 @@ export default function App() {
       } catch (e) {
         fails += 1;
         setSyncStatus('error');
-        delay = Math.min(POLL_MAX_MS, POLL_OK_MS * Math.pow(1.8, fails));
+        delay = Math.min(POLL_MAX_MS, POLL_OK_MS * Math.pow(1.6, fails));
       } finally {
         inFlight = false;
         schedule(delay);
@@ -1415,7 +1415,7 @@ export default function App() {
 
   useEffect(() => {
     if (!publicView) return;
-    const i = setInterval(() => setNow(Date.now()), 1000);
+    const i = setInterval(() => setNow(Date.now()), 5000);
     return () => clearInterval(i);
   }, [publicView]);
 
@@ -1632,8 +1632,6 @@ export default function App() {
               </div>
             )}
           </section>
-
-
 
           <p className="text-center text-[10px] text-gray-400 pb-4">Read-only view • updates automatically</p>
         </div>
@@ -2141,6 +2139,14 @@ export default function App() {
           }`}
         >
           <Search className="w-4 h-4" /> Player Lookup
+        </button>
+        <button
+          onClick={() => setActiveTab('matchLogs')}
+          className={`px-4 md:px-5 py-2 rounded-xl text-xs md:text-sm font-bold flex items-center justify-center gap-2 transition cursor-pointer shrink-0 ${
+            activeTab === 'matchLogs' ? 'bg-cyan-600 text-white shadow-sm shadow-cyan-900/10' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+          }`}
+        >
+          <History className="w-4 h-4" /> Match Logs
         </button>
       </div>
 
