@@ -40,7 +40,8 @@ import {
   CircleDot,
   Volume2,
   Maximize2,
-  Minimize2
+  Minimize2,
+  QrCode,
 } from 'lucide-react';
 
 // --- DYNAMIC COURT / LEVEL BADGE COLOR HELPER ---
@@ -142,11 +143,11 @@ const calculateAdvancedPlayerMetrics = (player, matchHistory = []) => {
 };
 
 // ---- Google Sheets sync: paste your Apps Script Web App URL here ----
-const SHEET_URL = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_SHEET_URL) || 'https://script.google.com/macros/s/AKfycbwJMsJQkZnNbKAcd8p0A06WLwic3V3DEFC661r6qLQXgLTSiZGGyMN_NBNrx_jbXBm6/exec';
+const SHEET_URL = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_SHEET_URL) || 'PASTE_YOUR_WEB_APP_URL_HERE';
 const SHEET_ENABLED = SHEET_URL.startsWith('https://');
 const SHEET_SECRET = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_SHEET_SECRET) || '1f8c4b7a93e2d605f1a8c3b9e7d24a0f6c5b8e1d3a9f7c2b4e6d8a0f1c3b5e7d';
 
-const PUBLIC_VIEW_URL = () => `${window.location.origin}${window.location.pathname}?view=public&k=PBL2026`;
+const PUBLIC_VIEW_URL = () => `${window.location.origin}${window.location.pathname}?view=public&k=queue2026`;
 
 export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(() => {
@@ -198,11 +199,14 @@ export default function App() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const publicView = useMemo(() => {
     const p = new URLSearchParams(window.location.search);
-    return p.get('view') === 'public' && p.get('k') === 'PBL2026';
+    // Accept both cases so already-shared links keep working.
+    const k = (p.get('k') || '').toLowerCase();
+    return p.get('view') === 'public' && k === 'queue2026';
   }, []);
   const [showImportModal, setShowImportModal] = useState(false);
   const [importTextContent, setImportTextContent] = useState('');
   const [isSavingImage, setIsSavingImage] = useState(false);
+  const [showQrModal, setShowQrModal] = useState(false);
 
   const summaryRef = useRef(null);
 
@@ -441,57 +445,94 @@ export default function App() {
       .catch(() => { syncReady.current = false; setSyncStatus('error'); });
   }, []);
 
-  // SPECTATOR: poll for the latest published snapshot, top up if stale.
+  // SPECTATOR: poll for the latest published snapshot.
+  // - one request in flight at a time, so a slow Apps Script cold start cannot
+  //   stack another read on top of it
+  // - failures counted locally (not read off syncStatus, which is stale inside
+  //   this closure) so the backoff actually engages
   useEffect(() => {
     if (!SHEET_ENABLED || !publicView) return;
 
     let stopped = false;
-    let attempts = 0;
+    let fails = 0;
+    let timer = null;
+    let inFlight = false;
+
+    const POLL_OK_MS = 12000;   // healthy cadence — Apps Script is not fast
+    const POLL_MAX_MS = 45000;  // ceiling while failing
+
+    const schedule = (ms) => {
+      if (stopped) return;
+      clearTimeout(timer);
+      timer = setTimeout(tick, ms);
+    };
 
     const tick = async () => {
-      if (stopped) return;
+      if (stopped || inFlight) return;
+      inFlight = true;
+      let delay = POLL_OK_MS;
       try {
         const res = await fetch(`${SHEET_URL}?t=${Date.now()}`, { method: 'GET' });
         const d = await res.json();
         if (d && d.ok && !d.empty && d.state) {
           applyRemoteState(d.state);
           setRemoteUpdatedAt(d.updatedAt || null);
-          setSyncStatus('saved');
-          attempts = 0;
-        } else {
-          setSyncStatus('saved');
         }
+        setSyncStatus('saved');
+        fails = 0;
       } catch (e) {
+        fails += 1;
         setSyncStatus('error');
+        delay = Math.min(POLL_MAX_MS, POLL_OK_MS * Math.pow(1.6, fails));
       } finally {
-        if (!stopped) {
-          // Back off on repeated failures so we do not trip Apps Script's
-          // concurrency limit; reset to 8s once a read succeeds.
-          const delay = syncStatus === 'error' ? Math.min(30000, 8000 * Math.pow(1.5, attempts)) : 8000;
-          attempts += 1;
-          setTimeout(tick, delay);
-        }
+        inFlight = false;
+        schedule(delay);
       }
     };
 
     tick();
-    return () => { stopped = true; };
+    return () => { stopped = true; clearTimeout(timer); };
   }, [publicView]);
 
   // SCORER ONLY: publish on change. Guards:
   //  - never publish from the spectator view (would clobber the session)
   //  - wait until the boot read has settled, so we don't overwrite with seeds
   //  - debounce, because roster changes fire on every check-in
+  const publishInFlight = useRef(false);
+  const pendingPublish = useRef(null);
+
   useEffect(() => {
     if (!SHEET_ENABLED || publicView || !syncReady.current) return;
+
+    const state = { queueMode, totalCourtCount, totalLevelCount, defaultCheckInLevel, sessionActive, courts, roster, totalMatches, matchHistory, eventHistory, sessionStartedAt };
+    pendingPublish.current = state;
     setSyncStatus('saving');
+
     const timer = setTimeout(() => {
-      const state = { queueMode, totalCourtCount, totalLevelCount, defaultCheckInLevel, sessionActive, courts, roster, totalMatches, matchHistory, eventHistory, sessionStartedAt };
-      fetch(SHEET_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ secret: SHEET_SECRET, state }) })
-        .then(r => r.json())
-        .then(d => setSyncStatus(d && d.ok ? 'saved' : 'error'))
-        .catch(() => setSyncStatus('error'));
-    }, 2000);
+      // A write already on the wire: keep the newest payload queued and let the
+      // completion handler pick it up, instead of firing a second POST.
+      if (publishInFlight.current) return;
+
+      const send = (payload) => {
+        publishInFlight.current = true;
+        fetch(SHEET_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ secret: SHEET_SECRET, state: payload }) })
+          .then(r => r.json())
+          .then(d => setSyncStatus(d && d.ok ? 'saved' : 'error'))
+          .catch(() => setSyncStatus('error'))
+          .finally(() => {
+            publishInFlight.current = false;
+            // Anything queued while this write was in flight goes out now.
+            if (pendingPublish.current && pendingPublish.current !== payload) {
+              const next = pendingPublish.current;
+              pendingPublish.current = null;
+              send(next);
+            }
+          });
+      };
+
+      send(state);
+    }, 2500);
+
     return () => clearTimeout(timer);
   }, [queueMode, totalCourtCount, totalLevelCount, defaultCheckInLevel, sessionActive, courts, roster, totalMatches, matchHistory, eventHistory, sessionStartedAt, publicView]);
 
@@ -2081,6 +2122,14 @@ export default function App() {
           >
             <Activity className="w-4 h-4" /> Live Match View
           </button>
+
+          <button
+            onClick={() => setShowQrModal(true)}
+            className="px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition cursor-pointer border shadow-2xs bg-white border-gray-200 text-gray-700 hover:bg-gray-50"
+            title="Show a QR code for the spectator view"
+          >
+            <QrCode className="w-4 h-4" /> Live QR
+          </button>
         </div>
       </div>
 
@@ -3637,6 +3686,55 @@ export default function App() {
           );
         })()}
 
+        {showQrModal && (() => {
+          const liveUrl = PUBLIC_VIEW_URL();
+          const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=280x280&margin=8&data=${encodeURIComponent(liveUrl)}`;
+
+          return (
+            <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setShowQrModal(false)}>
+              <div className="bg-white rounded-3xl p-6 max-w-sm w-full text-center space-y-4 shadow-2xl" onClick={e => e.stopPropagation()}>
+                <div className="flex items-center justify-between">
+                  <h3 className="font-extrabold text-gray-900 uppercase tracking-wide text-sm flex items-center gap-2">
+                    <QrCode className="w-4 h-4 text-cyan-600" /> Live Match View
+                  </h3>
+                  <button onClick={() => setShowQrModal(false)} className="text-gray-400 hover:text-gray-700 cursor-pointer"><X className="w-5 h-5" /></button>
+                </div>
+
+                <p className="text-xs text-gray-500">
+                  Scan to follow the courts, the current standings and the next matches.
+                </p>
+
+                <img
+                  src={qrSrc}
+                  alt="QR code for the live match view"
+                  className="mx-auto w-[280px] h-[280px] border border-gray-200 rounded-2xl bg-white"
+                />
+
+                <div className="bg-gray-50 border border-gray-200 rounded-xl p-3">
+                  <div className="text-[10px] text-gray-400 font-bold uppercase tracking-wider mb-1">Link</div>
+                  <div className="text-[10px] text-gray-600 font-mono break-all">{liveUrl}</div>
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => {
+                      if (navigator.clipboard) navigator.clipboard.writeText(liveUrl);
+                    }}
+                    className="flex-1 px-4 py-2.5 rounded-xl text-xs font-bold bg-gray-50 hover:bg-gray-100 text-gray-700 border border-gray-200 cursor-pointer"
+                  >
+                    Copy link
+                  </button>
+                  <button
+                    onClick={() => setShowQrModal(false)}
+                    className="flex-1 px-4 py-2.5 rounded-xl text-xs font-bold bg-cyan-600 hover:bg-cyan-500 text-white cursor-pointer shadow-xs"
+                  >
+                    Done
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
       </main>
     </div>
   );
