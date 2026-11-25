@@ -142,8 +142,9 @@ const calculateAdvancedPlayerMetrics = (player, matchHistory = []) => {
 };
 
 // ---- Google Sheets sync: paste your Apps Script Web App URL here ----
-const SHEET_URL = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_SHEET_URL) || 'https://script.google.com/macros/s/AKfycbwJMsJQkZnNbKAcd8p0A06WLwic3V3DEFC661r6qLQXgLTSiZGGyMN_NBNrx_jbXBm6/exec';
+const SHEET_URL = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_SHEET_URL) || 'https://script.google.com/macros/library/d/1PDORA6XsrsENf-ikB5j52xpFuShul2MWC-6oPAM-2Ilidn3H13SrMC_s/4';
 const SHEET_ENABLED = SHEET_URL.startsWith('https://');
+const SHEET_SECRET = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_SHEET_SECRET) || 'https://script.google.com/macros/library/d/1PDORA6XsrsENf-ikB5j52xpFuShul2MWC-6oPAM-2Ilidn3H13SrMC_s/4';
 
 const PUBLIC_VIEW_URL = () => `${window.location.origin}${window.location.pathname}?view=public&k=PBL2026`;
 
@@ -486,7 +487,7 @@ export default function App() {
     setSyncStatus('saving');
     const timer = setTimeout(() => {
       const state = { queueMode, totalCourtCount, totalLevelCount, defaultCheckInLevel, sessionActive, courts, roster, totalMatches, matchHistory, eventHistory, sessionStartedAt };
-      fetch(SHEET_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ state }) })
+      fetch(SHEET_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ secret: SHEET_SECRET, state }) })
         .then(r => r.json())
         .then(d => setSyncStatus(d && d.ok ? 'saved' : 'error'))
         .catch(() => setSyncStatus('error'));
