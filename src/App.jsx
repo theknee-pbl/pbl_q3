@@ -144,7 +144,7 @@ const calculateAdvancedPlayerMetrics = (player, matchHistory = []) => {
 // ---- Google Sheets sync: paste your Apps Script Web App URL here ----
 const SHEET_URL = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_SHEET_URL) || 'https://script.google.com/macros/s/AKfycbwJMsJQkZnNbKAcd8p0A06WLwic3V3DEFC661r6qLQXgLTSiZGGyMN_NBNrx_jbXBm6/exec';
 const SHEET_ENABLED = SHEET_URL.startsWith('https://');
-const SHEET_SECRET = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_SHEET_SECRET) || 'https://script.google.com/macros/library/d/1PDORA6XsrsENf-ikB5j52xpFuShul2MWC-6oPAM-2Ilidn3H13SrMC_s/4';
+const SHEET_SECRET = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_SHEET_SECRET) || '1f8c4b7a93e2d605f1a8c3b9e7d24a0f6c5b8e1d3a9f7c2b4e6d8a0f1c3b5e7d';
 
 const PUBLIC_VIEW_URL = () => `${window.location.origin}${window.location.pathname}?view=public&k=PBL2026`;
 
