@@ -168,32 +168,31 @@ export default function App() {
   const [playerSearchQuery, setPlayerSearchQuery] = useState('');
 
   const [queueMode, setQueueMode] = useState(() => {
-    return localStorage.getItem('pickleq_queue_mode') || 'independent';
+    return 'independent';
   });
 
   const [totalCourtCount, setTotalCourtCount] = useState(() => {
-    return parseInt(localStorage.getItem('pickleq_court_count') || '3', 10);
+    return 3;
   });
 
   const [totalLevelCount, setTotalLevelCount] = useState(() => {
-    return parseInt(localStorage.getItem('pickleq_level_count') || '3', 10);
+    return 3;
   });
 
   const [defaultCheckInLevel, setDefaultCheckInLevel] = useState(() => {
-    return parseInt(localStorage.getItem('pickleq_default_checkin_level') || '1', 10);
+    return 1;
   });
 
   const [sessionActive, setSessionActive] = useState(() => {
-    return JSON.parse(localStorage.getItem('pickleq_session_active') || 'false');
+    return false;
   });
 
   const [showSummaryModal, setShowSummaryModal] = useState(false);
   const [eventHistory, setEventHistory] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('pickleq_event_history') || '[]'); } catch (e) { return []; }
+    return [];
   });
   const [sessionStartedAt, setSessionStartedAt] = useState(() => {
-    const v = localStorage.getItem('pickleq_session_started_at');
-    return v ? parseInt(v, 10) : null;
+    return null;
   });
   const [selectedEventId, setSelectedEventId] = useState(null);
   const [eventDetailTab, setEventDetailTab] = useState('leaderboard');
@@ -218,8 +217,6 @@ export default function App() {
   const [partnerP2, setPartnerP2] = useState('');
 
   const [courts, setCourts] = useState(() => {
-    const saved = localStorage.getItem('pickleq_courts');
-    if (saved) return JSON.parse(saved);
     return Array.from({ length: totalCourtCount }, (_, i) => ({
       id: i + 1,
       name: `Court 0${i + 1}`,
@@ -233,8 +230,6 @@ export default function App() {
   });
 
   const [roster, setRoster] = useState(() => {
-    const saved = localStorage.getItem('pickleq_roster');
-    if (saved) return JSON.parse(saved);
     return [
       { id: '1', name: 'Alex Rivera', gamesPlayed: 6, wins: 5, losses: 1, level: 1, assignedCourt: 1, courtGames: {}, timePlayedSec: 1800, isCheckedIn: true, partnerId: '2', checkedInAt: Date.now() - 620000, headToHead: {}, scheduleStrength: 0 },
       { id: '2', name: 'Jordan Chen', gamesPlayed: 6, wins: 4, losses: 2, level: 1, assignedCourt: 1, courtGames: {}, timePlayedSec: 1800, isCheckedIn: true, partnerId: '1', checkedInAt: Date.now() - 510000, headToHead: {}, scheduleStrength: 0 },
@@ -246,14 +241,12 @@ export default function App() {
   });
 
   const [matchHistory, setMatchHistory] = useState(() => {
-    const saved = localStorage.getItem('pickleq_match_history');
-    if (saved) return JSON.parse(saved);
     return [];
   });
 
   const [playerName, setPlayerName] = useState('');
   const [totalMatches, setTotalMatches] = useState(() => {
-    return parseInt(localStorage.getItem('pickleq_matches') || '0', 10);
+    return 0;
   });
 
   const fileInputRef = useRef(null);
@@ -395,26 +388,12 @@ export default function App() {
     (p) => p.isCheckedIn && !activeCourtPlayerIds.has(p.id)
   );
 
-  useEffect(() => localStorage.setItem('pickleq_queue_mode', queueMode), [queueMode]);
-  useEffect(() => localStorage.setItem('pickleq_court_count', totalCourtCount.toString()), [totalCourtCount]);
-  useEffect(() => localStorage.setItem('pickleq_level_count', totalLevelCount.toString()), [totalLevelCount]);
-  useEffect(() => localStorage.setItem('pickleq_default_checkin_level', defaultCheckInLevel.toString()), [defaultCheckInLevel]);
-  useEffect(() => localStorage.setItem('pickleq_session_active', JSON.stringify(sessionActive)), [sessionActive]);
-  useEffect(() => localStorage.setItem('pickleq_courts', JSON.stringify(courts)), [courts]);
-  useEffect(() => localStorage.setItem('pickleq_roster', JSON.stringify(roster)), [roster]);
-  useEffect(() => localStorage.setItem('pickleq_matches', totalMatches.toString()), [totalMatches]);
-  useEffect(() => localStorage.setItem('pickleq_match_history', JSON.stringify(matchHistory)), [matchHistory]);
-  useEffect(() => localStorage.setItem('pickleq_event_history', JSON.stringify(eventHistory)), [eventHistory]);
-  useEffect(() => {
-    if (sessionStartedAt) localStorage.setItem('pickleq_session_started_at', String(sessionStartedAt));
-    else localStorage.removeItem('pickleq_session_started_at');
-  }, [sessionStartedAt]);
-
   // ---- Google Sheets sync ----
   // Direction is one-way: the scorer's device (the non-public view) owns the
   // session and publishes it; the public/spectator view only ever reads.
   const [syncStatus, setSyncStatus] = useState(SHEET_ENABLED ? 'loading' : 'off');
   const syncReady = useRef(false);
+  const [sheetLoaded, setSheetLoaded] = useState(false);
   const [remoteUpdatedAt, setRemoteUpdatedAt] = useState(null);
 
   // Apply one published snapshot to local state. Used by the spectator poll.
@@ -433,17 +412,32 @@ export default function App() {
     setSessionStartedAt(s.sessionStartedAt || null);
   };
 
-  // SCORER: read once on boot so a refresh does not lose the session.
+  // SCORER: load the saved session + event history from the sheet on boot.
+  // Publishing stays blocked until this succeeds, so a failed load can never
+  // overwrite the sheet with empty/seed data. Retries every 5s on failure.
   useEffect(() => {
     if (!SHEET_ENABLED || publicView) return;
-    fetch(`${SHEET_URL}?t=${Date.now()}`)
-      .then(r => r.json())
-      .then(d => {
-        applyRemoteState(d && d.state);
-        syncReady.current = true;
-        setSyncStatus('saved');
-      })
-      .catch(() => { syncReady.current = false; setSyncStatus('error'); });
+    let stopped = false;
+    let timer = null;
+    const load = () => {
+      fetch(`${SHEET_URL}?t=${Date.now()}`)
+        .then(r => r.json())
+        .then(d => {
+          if (stopped) return;
+          applyRemoteState(d && d.state);
+          syncReady.current = true;
+          setSyncStatus('saved');
+          setSheetLoaded(true);
+        })
+        .catch(() => {
+          if (stopped) return;
+          syncReady.current = false;
+          setSyncStatus('error');
+          timer = setTimeout(load, 5000);
+        });
+    };
+    load();
+    return () => { stopped = true; clearTimeout(timer); };
   }, []);
 
   // SPECTATOR: poll for the latest published snapshot.
@@ -535,7 +529,7 @@ export default function App() {
     }, 2500);
 
     return () => clearTimeout(timer);
-  }, [queueMode, totalCourtCount, totalLevelCount, defaultCheckInLevel, sessionActive, courts, roster, totalMatches, matchHistory, eventHistory, sessionStartedAt, publicView]);
+  }, [queueMode, totalCourtCount, totalLevelCount, defaultCheckInLevel, sessionActive, courts, roster, totalMatches, matchHistory, eventHistory, sessionStartedAt, publicView, sheetLoaded]);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -1392,8 +1386,7 @@ export default function App() {
 
   const handleResetSession = () => {
     if (window.confirm("Reset all session data, courts, and queues?")) {
-      localStorage.clear();
-      localStorage.setItem('pickleq_event_history', JSON.stringify(eventHistory));
+      localStorage.removeItem('pickleq_is_logged_in');
       setSessionStartedAt(null);
       setIsLoggedIn(false);
       setSessionActive(false);
